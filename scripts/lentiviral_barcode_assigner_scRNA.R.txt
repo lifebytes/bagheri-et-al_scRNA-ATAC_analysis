@@ -1,0 +1,305 @@
+####Deatailed help to run the codes
+##args[1]:raw_matrix
+#Description: Barcode matrix raw counts for the sample of interest: provide the file path (csv format)
+
+##args[2]:out
+#Description: output directory: output file path to save the files and plots (without prefix name)
+
+####How to run the script?
+#Rscript <lentiviral_barcode_assigner_scRNA.R> <matrix raw counts> <output directory path>
+#
+##needed libraries
+
+##################print the arguments####################
+args <- commandArgs(trailingOnly = TRUE)
+print(args)
+
+raw_matrix<-args[1]
+out<-args[2]
+
+####################argument checks######################
+if(length(args)!=2){
+    stop("Error: Number of input arguments are not compatible with lentiviral_barcode_assigner_scRNA.R script")
+    }
+    
+if(file.exists(raw_matrix)!=TRUE){
+    stop(paste0("Error: ",raw_matrix," matrix file does not exist"," :existing file is needed"))
+    }
+
+if(file.exists(out)!=TRUE){
+    dir.create(out)
+    }
+
+   
+library(plyr)
+library(reshape2)
+library(ggplot2)
+library(ggpubr)
+library(utils)
+#library(base)
+
+#########Reading Barcode matrix raw counts#################### 
+data<-read.csv(raw_matrix,row.names=1)
+
+##### Removing custom barcode named "unmapped" ####################
+if (length(which(rownames(data) == "unmapped"))>0){
+unmapped_index <- which(rownames(data) == "unmapped")
+tmp <- as.data.frame(apply(data[-unmapped_index,],1,sum))
+print(paste0("There is ",length(which(rownames(data) == "unmapped"))," unmapped barcode in the sample matrix"))
+}
+
+if (length(which(rownames(data) == "unmapped"))==0){
+tmp <- as.data.frame(apply(data,1,sum))
+print("There is no unmapped barcode in the sample matrix")
+}
+
+##### Renaming custom barcode column  as "Dominant_Barcode" for ease of table joining to be done later. ##########################
+tmp$Dominant_barcode <- row.names(tmp)
+names(tmp) <- c("Total_count", "Dominant_barcode(Cu)")
+
+print("Started calculating prior probabilities of sample barcodes")
+##### Calculating prior probability of sample barcodes #######################################
+print(paste0("There are ",length(which(tmp$Total_count == 0))," sample barcodes with the total count of zero"))
+tmp <- tmp[tmp$Total_count > 0,] ## ____ Custom barcodes with count > 0.
+tmp$`P(Cu)` <- tmp$Total_count/sum(tmp$Total_count)
+custom_table <- tmp ### Observation: Total ____ of Custom barcodes present
+rm(tmp)
+print(dim(custom_table))
+##### subset barcodes which are having the btotal count >0 from data #######################
+print("Subset the matrix by removing the rows which are with total counts of zero")
+x <- data[rownames(custom_table),]
+
+print("Started calculating prior probabilities of cell barcodes")
+##########Calculating prior probability of cell barcodes###########
+tmp <- as.data.frame(apply(x,2,sum))
+tmp$`Cell_code(C)` <- row.names(tmp)
+names(tmp) <- c("Total_count", "Cell_code(C)")
+print(paste0("There are ",length(which(tmp$Total_count == 0))," cell barcodes with the total count of zero"))
+tmp <- tmp[which(tmp$Total_count > 0),]
+tmp$`P(C)` <- tmp$Total_count/sum(tmp$Total_count)
+Cell_table <- tmp
+rm(tmp)
+print(dim(Cell_table))
+####################### Creating modified count table #######################
+
+print("Subset the matrix by removing the rows and columns which are with total counts of zero")
+
+mod_count <- data[row.names(custom_table),row.names(Cell_table)]
+
+rm(custom_table)
+rm(Cell_table)
+
+print(paste0("Sample barcode matrix was reduced from ",nrow(data), " x ",ncol(data)," dimension to ",nrow(mod_count), " x ",ncol(mod_count)," dimension after filtration"))
+
+#########Find which are the barcodes are contributing for the count >0#############
+print("Find which are the barcodes are contributing for the count >0")
+
+y1 <- vector()
+z <- vector()
+z1 <- vector()
+z2 <- list()
+nam<-list()
+
+for(i in 1:ncol(mod_count)){
+    y1 <- c(y1, colnames(mod_count)[i])
+    z <- c(z, sum(mod_count[,i]))
+    z1 <- c(z1, length(which(mod_count[,i] > 0)))
+    z2[[i]] <- mod_count[which(mod_count[,i] > 0),i]
+    nam[[i]]<-rownames(mod_count)[which(mod_count[,i] > 0)]
+}
+
+z3 <- z2
+names(z3) <- y1
+
+######Create dummy matrix and filled with basic summary stats############
+print("Preparing basic summary stats")
+z4 <- data.frame(matrix(NA, nrow = length(z3), ncol = 7))
+
+for (i in 1:length(z3)){
+  z4[i,1]<-names(z3)[i]
+  z4[i,2]<-length(z3[[i]])
+  z4[i,3]<-sum(z3[[i]])
+  z4[i,4]<-max(z3[[i]])
+  z4[i,5]<-(max(z3[[i]])/sum(z3[[i]]))*100
+for (j in 1:length(z3[[i]])){
+  z4[i,6]<-paste(nam[[i]][which(z3[[i]]==max(z3[[i]]))],collapse=",")
+  z4[i,7]<-"No"
+  if(length(nam[[i]][which(z3[[i]]==max(z3[[i]]))])>1){z4[i,7]<-"Yes"}
+  }}
+  
+names(z4) <- c("Cell_code(C)", "No_of_distinct_custom_barcode",
+               "sum_of_custom_barcodes(c)",
+               "Count_of_dominant_custom_barcode(d)",
+               "%of_dominant_custom_barcode(c/d*100)", "Dominant_barcode(S)",
+               ">1 Dominant_barcode?")
+
+mod_count_stat <- z4
+row.names(mod_count_stat) <- mod_count_stat$`Cell_code(C)`
+
+rm(z4)
+rm(z3)
+rm(z2)
+rm(z)
+
+if(length(which(mod_count_stat[,">1 Dominant_barcode?"]=="Yes"))>=1){
+print(paste0(length(which(mod_count_stat[,">1 Dominant_barcode?"]=="Yes")), " cell barcodes are dominant barcodes"))
+}
+
+if(length(which(mod_count_stat[,">1 Dominant_barcode?"]=="Yes"))==0){
+print(paste0(length(which(mod_count_stat[,">1 Dominant_barcode?"]=="Yes")), " cell barcodes are dominant barcodes"))
+}
+
+###########seperate multiple dominant, single dominant ###########
+print("Strated classifying the cell barcodes based on summary stats")
+if(length(which(mod_count_stat[,">1 Dominant_barcode?"]=="Yes"))>=1){
+Multiple_Dominant_CB <- mod_count_stat[mod_count_stat$`>1 Dominant_barcode?` == "Yes",]
+}
+if(length(which(mod_count_stat[,">1 Dominant_barcode?"]=="Yes"))==0){
+print("There is no dominant barcodes in the sample")
+}
+
+Multiple_CB_with_1_dominant <- mod_count_stat[mod_count_stat$`>1 Dominant_barcode?` == "No" & mod_count_stat$No_of_distinct_custom_barcode != 1,]
+single_CB <- mod_count_stat[mod_count_stat$No_of_distinct_custom_barcode == 1,]
+
+
+mod_count_new<-as.data.frame(mod_count)
+mod_count_new$dup_names<-gsub("(\\d)-[ATGC]+$","\\1",rownames(mod_count_new))
+
+#dr == duplicate removed
+###########Prepare cross tab##########
+print("Preparing cross tab")
+mod_count_new_dr <- ddply(mod_count_new,"dup_names",numcolwise(sum))
+rownames(mod_count_new_dr) <- mod_count_new_dr$dup_names
+mod_count_new <- mod_count_new_dr
+
+#############Chi square test##########
+x <- chisq.test(mod_count_new_dr[,-1])
+stdres <- as.data.frame(x$stdres)
+
+##############Finding singlets, doublets etc..#############
+print("Started classifying the barcodes")
+q = seq(1, 30, by = 1)
+
+positives <- list()
+negative <- vector()
+singlets <- vector()
+doublets <- vector()
+negatives <- vector()
+multiplets <- vector()
+
+for(i in q){
+  n <- vector()
+  s <- 0
+  d <- 0
+  neg <- 0
+  m <- 0
+  for(j in 1:ncol(stdres)){
+     n <-  c(n,length(which(stdres[,j] > i)))
+     
+     if(length(which(stdres[,j] > i)) == 1){
+       s <- s+1
+       #print("singlet found")
+     }
+     
+     if(length(which(stdres[,j] > i)) == 2){
+       d <- d+1
+       #print("doublet found")
+     }
+     
+     if(length(which(stdres[,j] > i)) == 0){
+       neg <- neg+1
+       #print("negative found")
+     }
+     
+     if(length(which(stdres[,j] > i)) > 2){
+       m <- m+1
+       #print("multiplate found")
+     }
+  }
+  positives[[i]] <- n
+  singlets <- c(singlets,s)
+  doublets <- c(doublets,d)
+  negatives <- c(negatives,neg)
+  multiplets <- c(multiplets,m)
+}
+
+stat <- data.frame(negatives = negatives,
+                   singlets = singlets,
+                   doublets = doublets,
+                   mutiplets = multiplets)
+
+stat_melt <- melt(stat)
+stat_melt$x <- rep(1:30,4)
+
+print("Finding probability of singlets, doublets, multiplets and negatives")
+stat_prop <- as.data.frame(t(apply(stat,1, function(x){x/sum(x)})))
+stat_prop_melt <- melt(stat_prop)
+stat_prop_melt$x <- rep(1:30,4)
+
+###########Plot to find the cutoff which maximized singlets########
+p <- ggplot(data = stat_prop_melt, aes(x = x, y = value, group = variable)) +
+  geom_line(aes(color = variable), size = 1.5) + theme_minimal()
+
+p <- p + theme(
+               legend.position = "top",
+               axis.text = element_text(size = 10),
+               legend.text = element_text(size = 14),
+               legend.title = element_blank()) +  xlab("Cutoff") + ylab("Proportion")
+cutoff <- which(stat_prop$singlets == max(stat_prop$singlets))
+
+#### plotting ####
+p1 <- p + geom_vline(xintercept = cutoff, size = 1, linetype = "dashed")
+png(paste0(out,"plot_cutoff.png"), w = 1750, h = 800, res = 300)
+print(p1)
+dev.off()
+
+print(paste0(paste(cutoff,collapse=" and "), " are the cut off for the classification of barcodes")) 
+annotation <- list()
+custom_barcode_list <- list()
+
+for(i in 1:ncol(stdres)){
+  pos <- which(stdres[,i] > cutoff)
+  len <- length(pos)
+  if(len == 0){
+    annotation[[colnames(stdres)[i]]] <- "Negative"
+  }
+  
+  if(len == 1){
+    annotation[[colnames(stdres)[i]]] <- "Singlet"
+  }
+  
+  if(len == 2){
+    annotation[[colnames(stdres)[i]]] <- "Doublet"
+  }
+  
+  if(len > 2){
+    annotation[[colnames(stdres)[i]]] <- "Multiplet"
+  }
+  
+  custom_barcode_list[[colnames(stdres)[i]]] <- paste(row.names(stdres)[pos], 
+                                                      collapse = ",")
+  
+}
+
+#########Detection of singlet, doublet###########
+new_annotation <- data.frame(matrix(NA, nrow = length(annotation), ncol = 3))
+
+counter <- 1
+for(i in names(annotation)){
+  new_annotation[counter,1] <- i
+  new_annotation[counter,2] <- annotation[[i]]
+  new_annotation[counter,3] <- custom_barcode_list[[i]]
+  counter <- counter+1
+}
+
+names(new_annotation) <- c("Row.names", "new_annotation", "Custom_barcodes")
+
+metadata_new<-new_annotation
+row.names(metadata_new) <- metadata_new$Row.names
+
+metadata_new <- metadata_new[,-1]
+
+names(metadata_new)[ncol(metadata_new)-1] <- "Barcode_class_new"
+names(metadata_new)[ncol(metadata_new)] <- "CB_mapped"
+write.csv(metadata_new, file = paste0(out,"Barcode_classification_predicted.csv"))
+
